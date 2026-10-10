@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SolShield - Solana Wallet and Token Security Suite</title>
+<style>
+  :root { --bg:#0e1117; --card:#161b22; --line:#2a313c; --text:#e6edf3; --muted:#8b949e; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#9945ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width:920px; margin:0 auto; padding:24px 16px 60px; }
+  h1 { margin:0 0 4px; font-size:1.8rem; } h1 span { color:var(--accent); }
+  p.sub { color:var(--muted); margin:0 0 20px; line-height:1.45; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  input { flex:1; min-width:220px; padding:12px; border-radius:8px; border:1px solid var(--line); background:var(--card); color:var(--text); font-size:1rem; }
+  button { padding:12px 20px; border:0; border-radius:8px; background:var(--accent); color:#fff; font-weight:600; font-size:1rem; cursor:pointer; }
+  button.alt { background:var(--card); border:1px solid var(--line); padding:8px 14px; font-size:.9rem; }
+  button:disabled { opacity:.5; cursor:wait; }
+  details { margin-top:10px; color:var(--muted); font-size:.9rem; }
+  details input { width:100%; margin-top:6px; }
+  details a { color:var(--accent); }
+  #status { margin:18px 0 6px; color:var(--muted); min-height:1.2em; }
+  .summary { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin:14px 0; }
+  .box { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .box b { display:block; font-size:1.35rem; } .box small { color:var(--muted); }
+  .box.score { grid-column:1/-1; display:flex; align-items:center; gap:16px; border-width:2px; }
+  .box.score b { font-size:2.6rem; }
+  .box.score.ok { border-color:var(--ok); } .box.score.warn { border-color:var(--warn); } .box.score.bad { border-color:var(--bad); }
+  .actions { display:flex; gap:8px; flex-wrap:wrap; margin:6px 0 14px; }
+  .tokens { display:flex; flex-direction:column; gap:10px; }
+  .token { background:var(--card); border:1px solid var(--line); border-left-width:5px; border-radius:10px; padding:12px; }
+  .token.ok { border-left-color:var(--ok); } .token.warn { border-left-color:var(--warn); } .token.bad { border-left-color:var(--bad); }
+  .top { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; }
+  .mint { color:var(--muted); font-size:.8rem; word-break:break-all; margin-top:2px; } .mint a { color:var(--muted); }
+  ul { margin:8px 0 0; padding-left:18px; font-size:.92rem; line-height:1.4; }
+  li.bad { color:var(--bad); } li.warn { color:var(--warn); } li.ok { color:var(--ok); } li.info { color:var(--muted); }
+  .tag { display:inline-block; padding:2px 8px; border-radius:99px; font-size:.75rem; font-weight:700; white-space:nowrap; }
+  .tag.ok { background:#12261a; color:var(--ok); } .tag.warn { background:#2b2210; color:var(--warn); } .tag.bad { background:#2d1517; color:var(--bad); }
+  h2 { font-size:1.1rem; margin:22px 0 8px; }
+  footer { margin-top:30px; color:var(--muted); font-size:.8rem; line-height:1.5; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sol<span>Shield</span></h1>
+  <p class="sub">One box, two tools. Paste a <b>wallet address</b> to audit everything it holds, or paste a <b>token address</b> to check it before you buy. Read-only, no wallet connection, no keys.</p>
+
+  <div class="row">
+    <input id="addr" placeholder="Wallet address or token (mint) address" autocomplete="off" spellcheck="false">
+    <button id="go">Scan</button>
+  </div>
+  <details>
+    <summary>Advanced: RPC endpoint (use this if you see rate-limit errors)</summary>
+    <input id="rpc" value="https://api.mainnet-beta.solana.com">
+    <p>The free public endpoint is slow and limits requests. For best results get a free key at <a href="https://helius.dev" target="_blank" rel="noopener">helius.dev</a> and paste your URL above.</p>
+  </details>
+
+  <div id="status"></div>
+  <div id="summary" class="summary"></div>
+  <div id="actions" class="actions"></div>
+  <div id="delegations"></div>
+  <div id="tokens" class="tokens"></div>
+
+  <footer>
+    Heuristic checks using public Solana RPC data and DexScreener market data. A clean result is not a guarantee of safety, and a warning is not proof of a scam. Not financial advice. Always do your own research.
+  </footer>
+</main>
+
+<script>
+const TOKEN_PROGRAM = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const TOKEN_2022_PROGRAM = "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb";
+const EMPTY_ACCOUNT_RENT_SOL = 0.00203928;
+
+const KNOWN = {
+  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v": "USDC",
+  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB": "USDT",
+  "So11111111111111111111111111111111111111112": "Wrapped SOL",
+  "mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So": "mSOL (Marinade)",
+  "J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn": "JitoSOL",
+  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN": "JUP (Jupiter)",
+  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263": "BONK",
+  "HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3": "PYTH",
+  "jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL": "JTO (Jito)",
+  "rndrizKT3MK1iimdxRdWabcF7Zg7AR5T4nud4EkHBof": "RENDER",
+  "4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R": "RAY (Raydium)",
+  "orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE": "ORCA"
+};
+
+const $ = id => document.getElementById(id);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+let rpcUrl = "";
+let lastReport = null;
+
+try { const saved = localStorage.getItem("solshield_rpc"); if (saved) $("rpc").value = saved; } catch (e) {}
+
+/* ---------- RPC with retry ---------- */
+async function rpc(method, params) {
+  for (let i = 0; i < 4; i++) {
+    let res;
+    try {
+      res = await fetch(rpcUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+    } catch (e) {
+      if (i === 3) throw new Error("Could not reach the Solana RPC. Check your connection, or set a custom RPC under Advanced.");
+      await sleep(800 * (i + 1)); continue;
+    }
+    if (res.status === 429 || res.status === 403) {
+      if (i === 3) throw new Error("The RPC is rate limiting or blocking requests. Get a free RPC URL from helius.dev and paste it under Advanced.");
+      await sleep(1200 * (i + 1)); continue;
+    }
+    if (!res.ok) throw new Error("RPC error " + res.status);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error.message);
+    return data.result;
+  }
+}
+
+/* ---------- Data fetchers ---------- */
+async function detectType(addr) {
+  const r = await rpc("getAccountInfo", [addr, { encoding: "jsonParsed" }]);
+  const v = r.value;
+  if (v && v.data && v.data.parsed && v.data.parsed.type === "mint" && (v.owner === TOKEN_PROGRAM || v.owner === TOKEN_2022_PROGRAM)) return "token";
+  return "wallet";
+}
+
+async function tokenAccounts(owner, programId) {
+  const r = await rpc("getTokenAccountsByOwner", [owner, { programId }, { encoding: "jsonParsed" }]);
+  return r.value.map(v => v.account.data.parsed.info);
+}
+
+async function getMints(mints) {
+  const out = {};
+  for (let i = 0; i < mints.length; i += 100) {
+    const chunk = mints.slice(i, i + 100);
+    const r = await rpc("getMultipleAccounts", [chunk, { encoding: "jsonParsed" }]);
+    r.value.forEach((acc, idx) => {
+      if (acc && acc.data && acc.data.parsed) out[chunk[idx]] = { info: acc.data.parsed.info, program: acc.data.program };
+    });
+  }
+  return out;
+}
+
+async function fetchMarket(mints) {
+  const out = {};
+  for (let i = 0; i < mints.length; i += 30) {
+    const chunk = mints.slice(i, i + 30);
+    const res = await fetch("https://api.dexscreener.com/tokens/v1/solana/" + chunk.join(","));
+    if (!res.ok) throw new Error("DexScreener " + res.status);
+    const pairs = await res.json();
+    (Array.isArray(pairs) ? pairs : []).forEach(p => {
+      const m = p.baseToken && p.baseToken.address;
+      if (!m) return;
+      const liq = (p.liquidity && p.liquidity.usd) || 0;
+      if (!out[m] || liq > out[m].liq) {
+        out[m] = { liq, name: p.baseToken.name, symbol: p.baseToken.symbol, created: p.pairCreatedAt || null, vol24: (p.volume && p.volume.h24) || 0, price: p.priceUsd ? Number(p.priceUsd) : null };
+      }
+    });
+  }
+  return out;
+}
+
+async function topHolderPct(mint, supplyRaw) {
+  const r = await rpc("getTokenLargestAccounts", [mint]);
+  const top = r.value.slice(0, 10).reduce((a, v) => a + Number(v.amount), 0);
+  const sup = Number(supplyRaw);
+  return sup > 0 ? (top / sup) * 100 : null;
+}
+
+/* ---------- Risk engine ---------- */
+function assess(mint, meta, market, marketOk, holderPct, delegations) {
+  const f = [];
+  let score = 1;
+  const rank = { ok: 1, info: 1, warn: 2, bad: 3 };
+  const add = (sev, t) => { f.push({ s: sev, t }); score = Math.max(score, rank[sev]); };
+  const known = KNOWN[mint];
+
+  if (known) add("ok", "Recognized token: " + known + ".");
+  else add("info", "Not on the trusted list. Make sure this is the real token before interacting.");
+
+  if (!meta) {
+    add("warn", "Could not read this token's on-chain data.");
+  } else {
+    const info = meta.info;
+    if (info.freezeAuthority) add(known ? "info" : "bad", "Freeze authority is active: the issuer can freeze your balance so you cannot move it." + (known ? " Normal for regulated stablecoins." : ""));
+    if (info.mintAuthority) add(known ? "info" : "warn", "Mint authority is active: the issuer can create unlimited new supply and dilute holders." + (known ? " Normal for stablecoins." : ""));
+    if (!info.freezeAuthority && !info.mintAuthority) add("ok", "No mint or freeze authority: supply is fixed and balances cannot be frozen.");
+    if (meta.program === "spl-token-2022") {
+      const exts = (info.extensions || []).map(e => e.extension);
+      if (exts.includes("permanentDelegate")) add(known ? "warn" : "bad", "Permanent delegate: a third party can move or burn tokens from ANY holder's account at any time.");
+      if (exts.includes("transferHook")) add("warn", "Transfer hook: custom code runs on every transfer and could block selling.");
+      if (exts.includes("transferFeeConfig")) add("warn", "Transfer fee: a percentage is taken on every transfer.");
+      if (exts.includes("nonTransferable")) add("warn", "Non-transferable token: you cannot send or sell it.");
+    }
+  }
+
+  if (marketOk && !known) {
+    if (!market) {
+      add("bad", "No trading pair found. You may not be able to sell this token at all.");
+    } else {
+      const liq = market.liq;
+      if (liq < 1000) add("bad", "Extremely low liquidity ($" + Math.round(liq).toLocaleString() + "). Selling would be very difficult or move the price heavily.");
+      else if (liq < 10000) add("warn", "Low liquidity ($" + Math.round(liq).toLocaleString() + ").");
+      else add("ok", "Liquidity: $" + Math.round(liq).toLocaleString() + ".");
+      if (market.created) {
+        const days = (Date.now() - market.created) / 86400000;
+        if (days < 1) add("bad", "Brand new: trading pair created less than 1 day ago.");
+        else if (days < 7) add("warn", "Very new: trading pair is only " + Math.floor(days) + " days old.");
+        else add("info", "Trading pair age: " + Math.floor(days) + " days.");
+      }
+    }
+  }
+
+  if (holderPct != null && !known) {
+    const p = holderPct.toFixed(1);
+    if (holderPct > 90) add("bad", "Top 10 holders own " + p + "% of supply: extreme concentration (may include a liquidity pool).");
+    else if (holderPct > 60) add("warn", "Top 10 holders own " + p + "% of supply: high concentration (may include a liquidity pool).");
+    else add("ok", "Top 10 holders own " + p + "% of supply.");
+  }
+
+  (delegations || []).forEach(d => {
+    add(known ? "warn" : "bad", "Active delegation: address " + d.delegate.slice(0, 6) + "..." + d.delegate.slice(-4) + " is allowed to spend up to " + d.amount + " of this token from your account. Revoke it if you did not set this up.");
+  });
+
+  return { findings: f, score };
+}
+
+async function analyze(mints, delegMap, setStatus) {
+  setStatus("Reading token settings (" + mints.length + ")...");
+  const metas = await getMints(mints);
+  let market = {}, marketOk = true;
+  setStatus("Checking markets and liquidity...");
+  try { market = await fetchMarket(mints); } catch (e) { marketOk = false; }
+
+  const holders = {};
+  const unverified = mints.filter(m => !KNOWN[m]).slice(0, 12);
+  for (let i = 0; i < unverified.length; i++) {
+    setStatus("Checking holder concentration " + (i + 1) + "/" + unverified.length + "...");
+    try { holders[unverified[i]] = await topHolderPct(unverified[i], metas[unverified[i]] && metas[unverified[i]].info.supply); } catch (e) {}
+    if (i < unverified.length - 1) await sleep(350);
+  }
+
+  return mints.map(m => {
+    const a = assess(m, metas[m], market[m], marketOk, holders[m], delegMap[m]);
+    const mk = market[m];
+    const name = KNOWN[m] || (mk && mk.name ? mk.name + (mk.symbol ? " (" + mk.symbol + ")" : "") : "Unknown token");
+    return { mint: m, name, known: !!KNOWN[m], price: mk ? mk.price : null, ...a };
+  });
+}
+
+/* ---------- Rendering ---------- */
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; }
+function box(label, value, cls) { const b = el("div", "box" + (cls ? " " + cls : "")); b.appendChild(el("b", "", value)); b.appendChild(el("small", "", label)); return b; }
+const sevClass = s => (s === 3 ? "bad" : s === 2 ? "warn" : "ok");
+
+function card(r) {
+  const cls = sevClass(r.score);
+  const label = r.score === 3 ? "HIGH RISK" : r.score === 2 ? "CAUTION" : (r.known ? "TRUSTED" : "NO RED FLAGS");
+  const c = el("div", "token " + cls);
+  const top = el("div", "top");
+  top.appendChild(el("strong", "", r.name + (r.amount != null ? "  -  " + r.amountText : "")));
+  top.appendChild(el("span", "tag " + cls, label));
+  c.appendChild(top);
+  const m = el("div", "mint");
+  const a = el("a", "", r.mint);
+  a.href = "https://solscan.io/token/" + r.mint; a.target = "_blank"; a.rel = "noopener noreferrer";
+  m.appendChild(a); c.appendChild(m);
+  const ul = el("ul");
+  r.findings.forEach(f => ul.appendChild(el("li", f.s, f.t)));
+  c.appendChild(ul);
+  return c;
+}
+
+function actionButtons(report) {
+  const box = $("actions");
+  box.replaceChildren();
+  const copy = el("button", "alt", "Copy report");
+  copy.onclick = async () => { try { await navigator.clipboard.writeText(reportText(report)); copy.textContent = "Copied!"; } catch (e) { copy.textContent = "Copy failed"; } };
+  const dl = el("button", "alt", "Download JSON");
+  dl.onclick = () => {
+    const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "solshield-report.json"; a.click();
+  };
+  const share = el("button", "alt", "Copy share link");
+  share.onclick = async () => {
+    const url = location.origin + location.pathname + "?address=" + encodeURIComponent(report.address);
+    try { await navigator.clipboard.writeText(url); share.textContent = "Link copied!"; } catch (e) { share.textContent = url; }
+  };
+  box.append(copy, dl, share);
+}
+
+function reportText(r) {
+  const lines = ["SolShield report for " + r.address, "Type: " + r.type];
+  if (r.type === "wallet") lines.push("Wallet safety score: " + r.safetyScore + "/100 (" + r.verdict + ")", "High risk tokens: " + r.highRisk + ", Caution: " + r.caution, "Reclaimable rent: ~" + r.reclaimableSol.toFixed(4) + " SOL");
+  r.tokens.forEach(t => {
+    lines.push("", t.name + " [" + t.risk + "] " + t.mint);
+    t.findings.forEach(f => lines.push("  - " + f));
+  });
+  return lines.join("\n");
+}
+
+function tokenRecord(r) {
+  return { name: r.name, mint: r.mint, risk: r.score === 3 ? "HIGH RISK" : r.score === 2 ? "CAUTION" : "NO RED FLAGS", findings: r.findings.map(f => f.t) };
+}
+
+/* ---------- Main flows ---------- */
+async function scanToken(addr, setStatus) {
+  const [r] = await analyze([addr], {}, setStatus);
+  $("summary").append(box("Token", r.name), box("Risk level", r.score === 3 ? "High" : r.score === 2 ? "Caution" : "No red flags", "score " + sevClass(r.score)));
+  $("tokens").appendChild(card(r));
+  lastReport = { address: addr, type: "token", tokens: [tokenRecord(r)] };
+  actionButtons(lastReport);
+}
+
+async function scanWallet(addr, setStatus) {
+  setStatus("Reading wallet...");
+  const sol = (await rpc("getBalance", [addr])).value / 1e9;
+  const [a, b] = await Promise.all([tokenAccounts(addr, TOKEN_PROGRAM), tokenAccounts(addr, TOKEN_2022_PROGRAM)]);
+  const all = [...a, ...b];
+  const held = all.filter(x => Number(x.tokenAmount.uiAmount) > 0);
+  const empty = all.length - held.length;
+
+  const byMint = {}, delegMap = {};
+  held.forEach(x => {
+    byMint[x.mint] = (byMint[x.mint] || 0) + Number(x.tokenAmount.uiAmount);
+    if (x.delegate && x.delegatedAmount && Number(x.delegatedAmount.uiAmount) > 0) {
+      (delegMap[x.mint] = delegMap[x.mint] || []).push({ delegate: x.delegate, amount: x.delegatedAmount.uiAmountString });
+    }
+  });
+  const mints = Object.keys(byMint);
+
+  let rows = [];
+  if (mints.length) rows = await analyze(mints, delegMap, setStatus);
+  rows.forEach(r => { r.amount = byMint[r.mint]; r.amountText = byMint[r.mint].toLocaleString(undefined, { maximumFractionDigits: 6 }); });
+  rows.sort((p, q) => q.score - p.score);
+
+  const high = rows.filter(r => r.score === 3).length;
+  const caution = rows.filter(r => r.score === 2).length;
+  const delegCount = Object.values(delegMap).reduce((n, d) => n + d.length, 0);
+  const safety = Math.max(0, 100 - high * 25 - caution * 8 - delegCount * 10);
+  const verdict = safety >= 80 ? "Healthy" : safety >= 50 ? "Needs attention" : "Dangerous";
+  const scoreCls = safety >= 80 ? "ok" : safety >= 50 ? "warn" : "bad";
+  const reclaim = empty * EMPTY_ACCOUNT_RENT_SOL;
+  const value = rows.reduce((s, r) => s + (r.price ? r.price * r.amount : 0), 0);
+
+  const sc = box("Wallet safety score - " + verdict, safety + "/100", "score " + scoreCls);
+  $("summary").append(
+    sc,
+    box("SOL balance", sol.toFixed(4)),
+    box("Tokens held", String(rows.length)),
+    box("High risk", String(high)),
+    box("Caution", String(caution)),
+    box("Active delegations", String(delegCount)),
+    box("Empty token accounts", String(empty)),
+    box("Reclaimable rent (approx)", reclaim.toFixed(4) + " SOL"),
+    box("Est. value of priced tokens", "$" + value.toLocaleString(undefined, { maximumFractionDigits: 2 }))
+  );
+
+  if (delegCount) {
+    const h = el("h2", "", "Active delegations (someone can spend your tokens)");
+    $("delegations").appendChild(h);
+    rows.filter(r => delegMap[r.mint]).forEach(r => {
+      delegMap[r.mint].forEach(d => {
+        const c = el("div", "token bad");
+        c.appendChild(el("strong", "", r.name));
+        c.appendChild(el("div", "mint", "Delegate: " + d.delegate + "  |  Allowance: " + d.amount));
+        $("delegations").appendChild(c);
+      });
+    });
+  }
+
+  if (!rows.length) $("tokens").appendChild(el("div", "box", "No tokens with a balance found in this wallet."));
+  else { $("tokens").before(el("h2", "", "Tokens, riskiest first")); rows.forEach(r => $("tokens").appendChild(card(r))); }
+  if (empty > 0) $("tokens").appendChild(el("div", "box", "Tip: this wallet has " + empty + " empty token accounts. Closing them in a wallet like Phantom or Solflare returns about " + reclaim.toFixed(4) + " SOL in rent."));
+
+  lastReport = { address: addr, type: "wallet", safetyScore: safety, verdict, highRisk: high, caution, delegations: delegCount, reclaimableSol: reclaim, tokens: rows.map(tokenRecord) };
+  actionButtons(lastReport);
+}
+
+async function scan() {
+  const addr = $("addr").value.trim();
+  rpcUrl = $("rpc").value.trim() || "https://api.mainnet-beta.solana.com";
+  try { localStorage.setItem("solshield_rpc", rpcUrl); } catch (e) {}
+  const setStatus = t => { $("status").textContent = t; };
+  ["summary", "actions", "delegations", "tokens"].forEach(id => $(id).replaceChildren());
+  document.querySelectorAll("main > h2").forEach(h => h.remove());
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(addr)) { setStatus("That does not look like a valid Solana address."); return; }
+  $("go").disabled = true;
+  try {
+    setStatus("Detecting address type...");
+    const type = await detectType(addr);
+    if (type === "token") await scanToken(addr, setStatus); else await scanWallet(addr, setStatus);
+    setStatus("Scan complete (" + (type === "token" ? "token" : "wallet") + ").");
+  } catch (e) {
+    setStatus("Error: " + e.message);
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("go").addEventListener("click", scan);
+$("addr").addEventListener("keydown", e => { if (e.key === "Enter") scan(); });
+const pre = new URLSearchParams(location.search).get("address");
+if (pre) { $("addr").value = pre; scan(); }
+</script>
+</body>
+</html>
